@@ -51,6 +51,10 @@ FAST_SPEED = 2
 # Add to constants section
 STARTING_MONEY = 500
 MAX_TOWERS = 10
+ 
+# Add wave timer constant
+WAVE_TIMER = 30  # Seconds between waves
+TOWER_SPACING = TOWER_SIZE  # Minimum distance between towers
 
 # Colors
 WHITE = (255, 255, 255)
@@ -290,6 +294,8 @@ class Game:
         self.game_speed = NORMAL_SPEED
         self.money = STARTING_MONEY
         self.speed_button_rect = pygame.Rect(20, WINDOW_HEIGHT - 110, 120, 40)  # Above start button
+        self.wave_timer = WAVE_TIMER * 60  # Convert to frames (60 FPS)
+        self.wave_active = False
 
     def draw_placement_preview(self, mouse_pos):
         if self.selected_tower_type:
@@ -342,13 +348,20 @@ class Game:
         return self.speed_button_rect
 
     def is_valid_tower_position(self, x, y):
+        # Check if tower is too close to existing towers
+        for tower in self.towers:
+            dx = x - tower.x
+            dy = y - tower.y
+            distance = (dx**2 + dy**2)**0.5
+            if distance < TOWER_SPACING:
+                return False
+
         # Check if tower is too close to path
         for i in range(len(PATH_POINTS) - 1):
             start = pygame.math.Vector2(PATH_POINTS[i])
             end = pygame.math.Vector2(PATH_POINTS[i + 1])
             pos = pygame.math.Vector2(x, y)
             
-            # Calculate distance from point to line segment
             line_vec = end - start
             point_vec = pos - start
             line_len = line_vec.length()
@@ -374,6 +387,13 @@ class Game:
         health_rect = health_text.get_rect(topright=(WINDOW_WIDTH - 20, 20))
         self.screen.blit(health_text, health_rect)
 
+    def draw_wave_timer(self):
+        if self.game_started:
+            seconds_left = self.wave_timer // 60
+            timer_text = self.font.render(f"Next Wave: {seconds_left}s", True, WHITE)
+            timer_rect = timer_text.get_rect(center=(WINDOW_WIDTH // 2, 20))
+            self.screen.blit(timer_text, timer_rect)
+
     def draw_money(self):
         money_text = self.font.render(f"Money: ${self.money}", True, WHITE)
         money_rect = money_text.get_rect(topright=(WINDOW_WIDTH - 20, 60))  # Below health
@@ -385,17 +405,25 @@ class Game:
 
     def update(self):
         if self.game_started:
+            # Update wave timer
+            if self.wave_timer > 0:
+                self.wave_timer -= self.game_speed
+            else:
+                # Start new wave
+                self.wave_timer = WAVE_TIMER * 60
+                self.wave_number += 1
+                self.enemies_spawned = 0
+                self.wave_active = True
+
             # Apply game speed to all time-based updates
             for _ in range(self.game_speed):
                 # Update enemies and check for death/base damage
-                for enemy in self.enemies[:]:  # Use slice copy to safely remove while iterating
+                for enemy in self.enemies[:]:
                     enemy.move()
-                    # Remove enemy if health depleted
                     if enemy.health <= 0:
-                        self.money += 25  # Reward for killing enemy
+                        self.money += 25
                         self.enemies.remove(enemy)
                         continue
-                    # Check if enemy reached the end
                     if enemy.path_index >= len(PATH_POINTS) - 2:
                         self.base_health -= 10
                         self.enemies.remove(enemy)
@@ -405,16 +433,14 @@ class Game:
                     tower.update(self.enemies)
 
                 # Spawn enemies
-                if len(self.enemies) == 0 and self.enemies_spawned == WAVE_ENEMY_COUNT:
-                    self.wave_number += 1
-                    self.enemies_spawned = 0
-                
-                if self.enemies_spawned < WAVE_ENEMY_COUNT:
+                if self.wave_active and self.enemies_spawned < WAVE_ENEMY_COUNT:
                     self.spawn_counter += 1
                     if self.spawn_counter >= SPAWN_RATE:
                         self.enemies.append(Enemy(self.wave_number))
                         self.enemies_spawned += 1
                         self.spawn_counter = 0
+                        if self.enemies_spawned >= WAVE_ENEMY_COUNT:
+                            self.wave_active = False
 
     def run(self):
         while True:
@@ -437,18 +463,19 @@ class Game:
                             self.game_started = True
                         elif self.speed_button_rect.collidepoint(mouse_pos):
                             self.game_speed = NORMAL_SPEED if self.game_speed == FAST_SPEED else FAST_SPEED
+                        # Check tower selection first
                         elif self.tower_selector.handle_click(mouse_pos):
-                            if self.can_afford_tower(self.tower_selector.selected_tower):
-                                self.selected_tower_type = self.tower_selector.selected_tower
-                            else:
-                                self.selected_tower_type = None
-                        elif (self.game_started and self.selected_tower_type 
-                              and self.is_valid_tower_position(*mouse_pos)
-                              and self.can_afford_tower(self.selected_tower_type)):
+                            self.selected_tower_type = self.tower_selector.selected_tower
+                        # Then check tower placement
+                        elif (self.game_started and 
+                              self.selected_tower_type and 
+                              self.is_valid_tower_position(*mouse_pos) and 
+                              self.can_afford_tower(self.selected_tower_type)):
                             # Place tower and deduct cost
+                            x, y = mouse_pos
+                            new_tower = Tower(x, y, self.selected_tower_type)
+                            self.towers.append(new_tower)
                             self.money -= TOWER_TYPES[self.selected_tower_type]["cost"]
-                            self.towers.append(Tower(mouse_pos[0], mouse_pos[1], 
-                                                   self.selected_tower_type))
                         else:
                             # Clicking anywhere else deselects the tower
                             self.tower_selector.selected_tower = None
@@ -467,13 +494,21 @@ class Game:
             # Update game state
             self.update()
 
-            # Draw
-            self.screen.fill(WHITE)
-            self.draw_map()
-            self.draw_speed_button()  # Draw speed button first
-            self.draw_start_button()  # Then draw start button below it
+            # Draw everything in the correct order
+            self.draw_map()  # Draw the map first
+            
+            # Draw towers and enemies
+            for tower in self.towers:  # Draw towers before enemies
+                tower.draw(self.screen)
+            for enemy in self.enemies:  # Draw enemies on top of towers
+                enemy.draw(self.screen)
+
+            # Draw UI elements last
+            self.draw_speed_button()
+            self.draw_start_button()
             self.draw_wave_and_health()
-            self.draw_money()  # Add money display
+            self.draw_wave_timer()
+            self.draw_money()
             
             # Draw tower limit warning if applicable
             if len(self.towers) >= MAX_TOWERS:
@@ -481,18 +516,12 @@ class Game:
                 limit_rect = limit_text.get_rect(center=(WINDOW_WIDTH // 2, 60))
                 self.screen.blit(limit_text, limit_rect)
 
-            # Draw enemies and towers
-            for enemy in self.enemies:
-                enemy.draw(self.screen)
-            for tower in self.towers:
-                tower.draw(self.screen)
-
             # Draw tower placement preview
             mouse_pos = pygame.mouse.get_pos()
             if self.selected_tower_type and self.is_valid_tower_position(*mouse_pos):
                 self.draw_placement_preview(mouse_pos)
 
-            # Draw tower selector
+            # Draw tower selector last
             self.tower_selector.draw(self.screen)
 
             pygame.display.flip()
