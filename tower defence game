@@ -48,6 +48,10 @@ WAVE_ENEMY_COUNT = 10  # Number of enemies per wave
 NORMAL_SPEED = 1
 FAST_SPEED = 2
 
+# Add to constants section
+STARTING_MONEY = 500
+MAX_TOWERS = 10
+
 # Colors
 WHITE = (255, 255, 255)
 BLUE = (0, 0, 255)
@@ -284,8 +288,9 @@ class Game:
         self.enemies_spawned = 0
         self.base_health = BASE_HEALTH
         self.game_speed = NORMAL_SPEED
-        self.speed_button_rect = pygame.Rect(150, WINDOW_HEIGHT - 60, 120, 40)  # Next to start button
-    
+        self.money = STARTING_MONEY
+        self.speed_button_rect = pygame.Rect(20, WINDOW_HEIGHT - 110, 120, 40)  # Above start button
+
     def draw_placement_preview(self, mouse_pos):
         if self.selected_tower_type:
             x, y = mouse_pos
@@ -369,6 +374,15 @@ class Game:
         health_rect = health_text.get_rect(topright=(WINDOW_WIDTH - 20, 20))
         self.screen.blit(health_text, health_rect)
 
+    def draw_money(self):
+        money_text = self.font.render(f"Money: ${self.money}", True, WHITE)
+        money_rect = money_text.get_rect(topright=(WINDOW_WIDTH - 20, 60))  # Below health
+        self.screen.blit(money_text, money_rect)
+
+    def can_afford_tower(self, tower_type):
+        return (self.money >= TOWER_TYPES[tower_type]["cost"] and 
+                len(self.towers) < MAX_TOWERS)
+
     def update(self):
         if self.game_started:
             # Apply game speed to all time-based updates
@@ -378,6 +392,7 @@ class Game:
                     enemy.move()
                     # Remove enemy if health depleted
                     if enemy.health <= 0:
+                        self.money += 25  # Reward for killing enemy
                         self.enemies.remove(enemy)
                         continue
                     # Check if enemy reached the end
@@ -423,9 +438,15 @@ class Game:
                         elif self.speed_button_rect.collidepoint(mouse_pos):
                             self.game_speed = NORMAL_SPEED if self.game_speed == FAST_SPEED else FAST_SPEED
                         elif self.tower_selector.handle_click(mouse_pos):
-                            self.selected_tower_type = self.tower_selector.selected_tower
+                            if self.can_afford_tower(self.tower_selector.selected_tower):
+                                self.selected_tower_type = self.tower_selector.selected_tower
+                            else:
+                                self.selected_tower_type = None
                         elif (self.game_started and self.selected_tower_type 
-                              and self.is_valid_tower_position(*mouse_pos)):
+                              and self.is_valid_tower_position(*mouse_pos)
+                              and self.can_afford_tower(self.selected_tower_type)):
+                            # Place tower and deduct cost
+                            self.money -= TOWER_TYPES[self.selected_tower_type]["cost"]
                             self.towers.append(Tower(mouse_pos[0], mouse_pos[1], 
                                                    self.selected_tower_type))
                         else:
@@ -449,10 +470,17 @@ class Game:
             # Draw
             self.screen.fill(WHITE)
             self.draw_map()
-            self.draw_start_button()
-            self.draw_speed_button()  # Add speed button
+            self.draw_speed_button()  # Draw speed button first
+            self.draw_start_button()  # Then draw start button below it
             self.draw_wave_and_health()
+            self.draw_money()  # Add money display
             
+            # Draw tower limit warning if applicable
+            if len(self.towers) >= MAX_TOWERS:
+                limit_text = self.font.render("Max towers reached!", True, (255, 0, 0))
+                limit_rect = limit_text.get_rect(center=(WINDOW_WIDTH // 2, 60))
+                self.screen.blit(limit_text, limit_rect)
+
             # Draw enemies and towers
             for enemy in self.enemies:
                 enemy.draw(self.screen)
