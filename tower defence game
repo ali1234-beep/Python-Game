@@ -1,0 +1,450 @@
+import pygame
+import sys
+
+# Initialize Pygame
+pygame.init()
+
+# Constants
+WINDOW_WIDTH = 800
+WINDOW_HEIGHT = 600
+TOWER_SIZE = 40
+TILE_SIZE = 40
+ENEMY_SIZE = 20
+ENEMY_SPEED = 2
+SPAWN_RATE = 60  # Frames between enemy spawns
+
+# Add new constants
+TOWER_TYPES = {
+    "Sniper": {
+        "damage": 50,
+        "fire_rate": 60,  # Frames between shots
+        "range": 200,
+        "cost": 100,
+        "color": (50, 50, 150)
+    },
+    "Assault": {
+        "damage": 10,
+        "fire_rate": 15,
+        "range": 120,
+        "cost": 75,
+        "color": (150, 50, 50)
+    },
+    "Cannon": {
+        "damage": 25,
+        "fire_rate": 45,
+        "range": 150,
+        "cost": 150,
+        "color": (50, 150, 50)
+    }
+}
+
+# Add these constants at the top with other constants
+STARTING_ENEMY_HEALTH = 100
+HEALTH_SCALING_FACTOR = 1.2
+BASE_HEALTH = 100
+WAVE_ENEMY_COUNT = 10  # Number of enemies per wave
+
+# Colors
+WHITE = (255, 255, 255)
+BLUE = (0, 0, 255)
+GREEN = (34, 139, 34)  # Darker forest green
+PATH_COLOR = (139, 69, 19)  # Saddle brown - darker path
+LIGHT_GREEN = (46, 139, 34)  # Slightly lighter forest green
+DARK_GREEN = (25, 100, 25)  # Very dark green for contrast
+GRAY = (128, 128, 128)
+
+# Path points for enemies to follow (x, y coordinates)
+PATH_POINTS = [
+    (-20, 100),     # Start off-screen
+    (100, 100),     # First turn
+    (100, 300),     # Down
+    (300, 300),     # Right
+    (300, 150),     # Up
+    (500, 150),     # Right
+    (500, 400),     # Down
+    (800, 400)      # Exit
+]
+
+# Add new class for projectiles
+class Projectile:
+    def __init__(self, x, y, target, tower_type):
+        self.x = x
+        self.y = y
+        self.target = target
+        self.speed = 10
+        self.damage = TOWER_TYPES[tower_type]["damage"]
+        self.color = TOWER_TYPES[tower_type]["color"]
+        
+    def move(self):
+        # Calculate direction to target
+        dx = self.target.x - self.x
+        dy = self.target.y - self.y
+        distance = (dx**2 + dy**2)**0.5
+        if distance == 0:
+            return True
+        
+        # Normalize and multiply by speed
+        self.x += (dx/distance) * self.speed
+        self.y += (dy/distance) * self.speed
+        
+        # Check if hit target
+        if distance < 5:
+            self.target.health -= self.damage
+            return True
+        return False
+        
+    def draw(self, screen):
+        pygame.draw.circle(screen, self.color, (int(self.x), int(self.y)), 4)
+
+# Update Tower class
+class Tower:
+    def __init__(self, x, y, tower_type):
+        self.x = x
+        self.y = y
+        self.type = tower_type
+        self.stats = TOWER_TYPES[tower_type]
+        self.show_range = False
+        self.shoot_counter = 0
+        self.projectiles = []
+
+    def can_shoot(self):
+        return self.shoot_counter >= self.stats["fire_rate"]
+
+    def get_closest_enemy(self, enemies):
+        closest_enemy = None
+        min_dist = float('inf')
+        
+        for enemy in enemies:
+            dx = enemy.x - self.x
+            dy = enemy.y - self.y
+            dist = (dx**2 + dy**2)**0.5
+            
+            if dist <= self.stats["range"] and dist < min_dist:
+                closest_enemy = enemy
+                min_dist = dist
+        
+        return closest_enemy
+
+    def update(self, enemies):
+        self.shoot_counter += 1
+        
+        # Update existing projectiles
+        self.projectiles = [p for p in self.projectiles if not p.move()]
+        
+        # Check for new shots
+        if self.can_shoot():
+            target = self.get_closest_enemy(enemies)
+            if target:
+                self.projectiles.append(Projectile(self.x, self.y, target, self.type))
+                self.shoot_counter = 0
+
+    def draw(self, screen):
+        # Draw tower
+        pygame.draw.circle(screen, self.stats["color"], 
+                         (self.x, self.y), TOWER_SIZE // 2)
+        
+        # Draw range circle if selected or mouse hovering
+        if self.show_range:
+            pygame.draw.circle(screen, (255, 255, 255, 128), 
+                             (self.x, self.y), 
+                             self.stats["range"], 1)
+        
+        # Draw projectiles
+        for projectile in self.projectiles:
+            projectile.draw(screen)
+
+# Modify the Enemy class
+class Enemy:
+    def __init__(self, wave_number):
+        self.x = PATH_POINTS[0][0]
+        self.y = PATH_POINTS[0][1]
+        self.path_index = 0
+        # Scale health with wave number
+        self.max_health = int(STARTING_ENEMY_HEALTH * (HEALTH_SCALING_FACTOR ** wave_number))
+        self.health = self.max_health
+
+    def move(self):
+        target_x, target_y = PATH_POINTS[self.path_index + 1]
+        
+        # Move towards the current target point
+        if self.x < target_x:
+            self.x += ENEMY_SPEED
+        elif self.x > target_x:
+            self.x -= ENEMY_SPEED
+        
+        if self.y < target_y:
+            self.y += ENEMY_SPEED
+        elif self.y > target_y:
+            self.y -= ENEMY_SPEED
+            
+        # Check if reached current target
+        if (abs(self.x - target_x) < ENEMY_SPEED and 
+            abs(self.y - target_y) < ENEMY_SPEED):
+            if self.path_index < len(PATH_POINTS) - 2:
+                self.path_index += 1
+
+    def draw(self, screen):
+        # Draw enemy
+        pygame.draw.circle(screen, (255, 0, 0), (int(self.x), int(self.y)), ENEMY_SIZE // 2)
+        
+        # Draw health bar
+        health_bar_width = 40
+        health_bar_height = 5
+        health_ratio = self.health / self.max_health
+        pygame.draw.rect(screen, (255, 0, 0), (
+            self.x - health_bar_width//2,
+            self.y - ENEMY_SIZE - health_bar_height - 2,
+            health_bar_width,
+            health_bar_height
+        ))
+        pygame.draw.rect(screen, (0, 255, 0), (
+            self.x - health_bar_width//2,
+            self.y - ENEMY_SIZE - health_bar_height - 2,
+            health_bar_width * health_ratio,
+            health_bar_height
+        ))
+
+# Add TowerSelector class
+class TowerSelector:
+    def __init__(self):
+        self.selected_tower = None
+        self.tower_boxes = {}
+        self.setup_tower_boxes()
+
+    def setup_tower_boxes(self):
+        box_width = 60  # Made boxes smaller
+        box_height = 60
+        margin = 30
+        start_x = (WINDOW_WIDTH - (box_width + margin) * len(TOWER_TYPES)) // 2
+        y = WINDOW_HEIGHT - 80
+
+        for i, tower_type in enumerate(TOWER_TYPES):
+            x = start_x + (box_width + margin) * i
+            self.tower_boxes[tower_type] = pygame.Rect(x, y, box_width, box_height)
+
+    def draw(self, screen):
+        # Draw tower boxes
+        for tower_type, box in self.tower_boxes.items():
+            # Draw individual box background
+            pygame.draw.rect(screen, (100, 100, 100), box)  # Gray background
+            
+            # Draw tower preview as circle
+            tower_x = box.centerx
+            tower_y = box.centery
+            pygame.draw.circle(screen, TOWER_TYPES[tower_type]["color"], 
+                           (tower_x, tower_y), TOWER_SIZE // 2)
+
+            # Draw tower cost
+            font = pygame.font.Font(None, 24)
+            cost_text = font.render(str(TOWER_TYPES[tower_type]["cost"]), True, WHITE)
+            screen.blit(cost_text, (box.centerx - cost_text.get_width()//2, 
+                                  box.bottom - 20))
+            
+            # Highlight selected tower
+            if tower_type == self.selected_tower:
+                pygame.draw.rect(screen, WHITE, box, 2)  # White outline for selected tower
+
+    def handle_click(self, pos, right_click=False):
+        """Handle mouse clicks on tower selection boxes."""
+        # Handle right-click to deselect
+        if right_click:
+            self.selected_tower = None
+            return True
+
+        # Handle left-click selection
+        for tower_type, box in self.tower_boxes.items():
+            if box.collidepoint(pos):
+                self.selected_tower = tower_type
+                return True
+                
+        # Clicking outside tower boxes deselects
+        self.selected_tower = None
+        return False
+
+# Update Game class with wave management and base health
+class Game:
+    def __init__(self):
+        self.screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+        pygame.display.set_caption("Tower Defense")
+        self.clock = pygame.time.Clock()
+        self.towers = []
+        self.game_started = False
+        self.font = pygame.font.Font(None, 36)
+        self.grass_variations = [GREEN, LIGHT_GREEN, DARK_GREEN]
+        self.enemies = []
+        self.spawn_counter = 0
+        self.tower_selector = TowerSelector()
+        self.selected_tower_type = None
+        self.placement_preview = None
+        self.wave_number = 0
+        self.enemies_spawned = 0
+        self.base_health = BASE_HEALTH
+    
+    def draw_placement_preview(self, mouse_pos):
+        if self.selected_tower_type:
+            x, y = mouse_pos
+            # Draw transparent tower preview
+            preview_surface = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)
+            pygame.draw.circle(preview_surface, (*TOWER_TYPES[self.selected_tower_type]["color"], 128), 
+                             (x, y), TOWER_SIZE // 2)
+            # Draw range preview
+            pygame.draw.circle(preview_surface, (255, 255, 255, 64), 
+                             (x, y), TOWER_TYPES[self.selected_tower_type]["range"])
+            self.screen.blit(preview_surface, (0, 0))
+
+    def draw_map(self):
+        # Fill background with solid green
+        self.screen.fill(GREEN)
+        
+        # Draw path
+        path_width = 40
+        for i in range(len(PATH_POINTS) - 1):
+            start_pos = PATH_POINTS[i]
+            end_pos = PATH_POINTS[i + 1]
+            pygame.draw.line(self.screen, PATH_COLOR, start_pos, end_pos, path_width)
+        
+        # Draw rounded corners at path joints
+        for point in PATH_POINTS[1:-1]:
+            pygame.draw.circle(self.screen, PATH_COLOR, point, path_width // 2)
+        
+    def draw_start_button(self):
+        button_rect = pygame.Rect(20, WINDOW_HEIGHT - 60, 120, 40)
+        # Draw light green outline
+        pygame.draw.rect(self.screen, (100, 255, 100), button_rect, 3)  # Light green border
+        # Draw button background
+        inner_rect = pygame.Rect(23, WINDOW_HEIGHT - 57, 114, 34)
+        pygame.draw.rect(self.screen, GREEN if not self.game_started else (100, 100, 100), inner_rect)
+        text = self.font.render("Start", True, WHITE)
+        text_rect = text.get_rect(center=button_rect.center)
+        self.screen.blit(text, text_rect)
+        return button_rect
+
+    def is_valid_tower_position(self, x, y):
+        # Check if tower is too close to path
+        for i in range(len(PATH_POINTS) - 1):
+            start = pygame.math.Vector2(PATH_POINTS[i])
+            end = pygame.math.Vector2(PATH_POINTS[i + 1])
+            pos = pygame.math.Vector2(x, y)
+            
+            # Calculate distance from point to line segment
+            line_vec = end - start
+            point_vec = pos - start
+            line_len = line_vec.length()
+            
+            if line_len:
+                proj = point_vec.dot(line_vec) / line_len
+                proj = max(0, min(proj, line_len))
+                closest = start + (line_vec * proj / line_len)
+                distance = (pos - closest).length()
+                
+                if distance < 30:  # Minimum distance from path
+                    return False
+                    
+        return True
+
+    def draw_wave_and_health(self):
+        # Draw wave number
+        wave_text = self.font.render(f"Wave: {self.wave_number}", True, WHITE)
+        self.screen.blit(wave_text, (20, 20))
+        
+        # Draw base health in top right
+        health_text = self.font.render(f"Base Health: {self.base_health}", True, WHITE)
+        health_rect = health_text.get_rect(topright=(WINDOW_WIDTH - 20, 20))
+        self.screen.blit(health_text, health_rect)
+
+    def update(self):
+        if self.game_started:
+            # Spawn enemies
+            if len(self.enemies) == 0 and self.enemies_spawned == WAVE_ENEMY_COUNT:
+                # Start new wave when all enemies are cleared
+                self.wave_number += 1
+                self.enemies_spawned = 0
+                
+            if self.enemies_spawned < WAVE_ENEMY_COUNT:
+                self.spawn_counter += 1
+                if self.spawn_counter >= SPAWN_RATE:
+                    self.enemies.append(Enemy(self.wave_number))
+                    self.enemies_spawned += 1
+                    self.spawn_counter = 0
+            
+            # Update enemies and check for base damage
+            for enemy in self.enemies[:]:
+                enemy.move()
+                # Check if enemy reached the end
+                if enemy.path_index >= len(PATH_POINTS) - 2:
+                    self.base_health -= 10  # Damage base
+                    self.enemies.remove(enemy)
+            
+            # Update towers
+            for tower in self.towers:
+                tower.update(self.enemies)
+
+    def run(self):
+        while True:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    sys.exit()
+                
+                if event.type == pygame.MOUSEBUTTONDOWN:
+                    mouse_pos = pygame.mouse.get_pos()
+                    button_rect = self.draw_start_button()
+                    
+                    # Right click to deselect
+                    if event.button == 3:  # Right mouse button
+                        self.tower_selector.handle_click(mouse_pos, right_click=True)
+                        self.selected_tower_type = None
+                    # Left click handling
+                    elif event.button == 1:  # Left mouse button
+                        if button_rect.collidepoint(mouse_pos) and not self.game_started:
+                            self.game_started = True
+                        elif self.tower_selector.handle_click(mouse_pos):
+                            self.selected_tower_type = self.tower_selector.selected_tower
+                        elif (self.game_started and self.selected_tower_type 
+                              and self.is_valid_tower_position(*mouse_pos)):
+                            self.towers.append(Tower(mouse_pos[0], mouse_pos[1], 
+                                                   self.selected_tower_type))
+                        else:
+                            # Clicking anywhere else deselects the tower
+                            self.tower_selector.selected_tower = None
+                            self.selected_tower_type = None
+
+                # Show range when hovering over towers
+                if event.type == pygame.MOUSEMOTION:
+                    mouse_pos = pygame.mouse.get_pos()
+                    # Update tower range display
+                    for tower in self.towers:
+                        tower_center = (tower.x, tower.y)
+                        distance = ((mouse_pos[0] - tower_center[0])**2 + 
+                                  (mouse_pos[1] - tower_center[1])**2)**0.5
+                        tower.show_range = distance <= TOWER_SIZE // 2
+
+            # Update game state
+            self.update()
+
+            # Draw
+            self.screen.fill(WHITE)
+            self.draw_map()
+            self.draw_start_button()
+            self.draw_wave_and_health()  # Add this line
+            
+            # Draw enemies and towers
+            for enemy in self.enemies:
+                enemy.draw(self.screen)
+            for tower in self.towers:
+                tower.draw(self.screen)
+
+            # Draw tower placement preview
+            mouse_pos = pygame.mouse.get_pos()
+            if self.selected_tower_type and self.is_valid_tower_position(*mouse_pos):
+                self.draw_placement_preview(mouse_pos)
+
+            # Draw tower selector
+            self.tower_selector.draw(self.screen)
+
+            pygame.display.flip()
+            self.clock.tick(60)
+
+if __name__ == "__main__":
+    game = Game()
+    game.run()
