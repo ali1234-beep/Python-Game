@@ -44,6 +44,10 @@ HEALTH_SCALING_FACTOR = 1.2
 BASE_HEALTH = 100
 WAVE_ENEMY_COUNT = 10  # Number of enemies per wave
 
+# Add to the constants section
+NORMAL_SPEED = 1
+FAST_SPEED = 2
+
 # Colors
 WHITE = (255, 255, 255)
 BLUE = (0, 0, 255)
@@ -279,6 +283,8 @@ class Game:
         self.wave_number = 0
         self.enemies_spawned = 0
         self.base_health = BASE_HEALTH
+        self.game_speed = NORMAL_SPEED
+        self.speed_button_rect = pygame.Rect(150, WINDOW_HEIGHT - 60, 120, 40)  # Next to start button
     
     def draw_placement_preview(self, mouse_pos):
         if self.selected_tower_type:
@@ -319,6 +325,17 @@ class Game:
         self.screen.blit(text, text_rect)
         return button_rect
 
+    def draw_speed_button(self):
+        # Draw speed toggle button
+        pygame.draw.rect(self.screen, (100, 255, 100), self.speed_button_rect, 3)
+        inner_rect = pygame.Rect(self.speed_button_rect.x + 3, self.speed_button_rect.y + 3,
+                               self.speed_button_rect.width - 6, self.speed_button_rect.height - 6)
+        pygame.draw.rect(self.screen, GRAY, inner_rect)
+        speed_text = self.font.render(f"{self.game_speed}x", True, WHITE)
+        text_rect = speed_text.get_rect(center=self.speed_button_rect.center)
+        self.screen.blit(speed_text, text_rect)
+        return self.speed_button_rect
+
     def is_valid_tower_position(self, x, y):
         # Check if tower is too close to path
         for i in range(len(PATH_POINTS) - 1):
@@ -354,30 +371,35 @@ class Game:
 
     def update(self):
         if self.game_started:
-            # Spawn enemies
-            if len(self.enemies) == 0 and self.enemies_spawned == WAVE_ENEMY_COUNT:
-                # Start new wave when all enemies are cleared
-                self.wave_number += 1
-                self.enemies_spawned = 0
+            # Apply game speed to all time-based updates
+            for _ in range(self.game_speed):
+                # Update enemies and check for death/base damage
+                for enemy in self.enemies[:]:  # Use slice copy to safely remove while iterating
+                    enemy.move()
+                    # Remove enemy if health depleted
+                    if enemy.health <= 0:
+                        self.enemies.remove(enemy)
+                        continue
+                    # Check if enemy reached the end
+                    if enemy.path_index >= len(PATH_POINTS) - 2:
+                        self.base_health -= 10
+                        self.enemies.remove(enemy)
                 
-            if self.enemies_spawned < WAVE_ENEMY_COUNT:
-                self.spawn_counter += 1
-                if self.spawn_counter >= SPAWN_RATE:
-                    self.enemies.append(Enemy(self.wave_number))
-                    self.enemies_spawned += 1
-                    self.spawn_counter = 0
-            
-            # Update enemies and check for base damage
-            for enemy in self.enemies[:]:
-                enemy.move()
-                # Check if enemy reached the end
-                if enemy.path_index >= len(PATH_POINTS) - 2:
-                    self.base_health -= 10  # Damage base
-                    self.enemies.remove(enemy)
-            
-            # Update towers
-            for tower in self.towers:
-                tower.update(self.enemies)
+                # Update towers
+                for tower in self.towers:
+                    tower.update(self.enemies)
+
+                # Spawn enemies
+                if len(self.enemies) == 0 and self.enemies_spawned == WAVE_ENEMY_COUNT:
+                    self.wave_number += 1
+                    self.enemies_spawned = 0
+                
+                if self.enemies_spawned < WAVE_ENEMY_COUNT:
+                    self.spawn_counter += 1
+                    if self.spawn_counter >= SPAWN_RATE:
+                        self.enemies.append(Enemy(self.wave_number))
+                        self.enemies_spawned += 1
+                        self.spawn_counter = 0
 
     def run(self):
         while True:
@@ -398,6 +420,8 @@ class Game:
                     elif event.button == 1:  # Left mouse button
                         if button_rect.collidepoint(mouse_pos) and not self.game_started:
                             self.game_started = True
+                        elif self.speed_button_rect.collidepoint(mouse_pos):
+                            self.game_speed = NORMAL_SPEED if self.game_speed == FAST_SPEED else FAST_SPEED
                         elif self.tower_selector.handle_click(mouse_pos):
                             self.selected_tower_type = self.tower_selector.selected_tower
                         elif (self.game_started and self.selected_tower_type 
@@ -426,7 +450,8 @@ class Game:
             self.screen.fill(WHITE)
             self.draw_map()
             self.draw_start_button()
-            self.draw_wave_and_health()  # Add this line
+            self.draw_speed_button()  # Add speed button
+            self.draw_wave_and_health()
             
             # Draw enemies and towers
             for enemy in self.enemies:
